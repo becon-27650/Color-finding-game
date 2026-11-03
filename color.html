@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>色違い探しゲーム - エフェクト付き</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            text-align: center;
+            background-color: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            user-select: none; /* 文字の選択を防ぐ */
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .info {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: #666;
+        }
+        #score {
+            font-weight: bold;
+            color: #ff4757;
+        }
+        #game-container {
+            width: 400px;
+            height: 400px;
+            background-color: #fff;
+            border-radius: 12px;
+            padding: 10px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+            display: grid;
+            gap: 6px;
+            box-sizing: border-box;
+            transition: transform 0.1s ease;
+        }
+        .tile {
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.05s ease, opacity 0.2s ease;
+        }
+        /* 正解した時のフラッシュアニメーション */
+        @keyframes correct-flash {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.08); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .correct-anim {
+            animation: correct-flash 0.2s ease-out;
+            z-index: 10;
+        }
+        /* 間違えた時のコンテナの揺れ（シェイク）アニメーション */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-8px); }
+            40%, 80% { transform: translateX(8px); }
+        }
+        .shake-anim {
+            animation: shake 0.3s ease-in-out;
+            box-shadow: 0 10px 25px rgba(255, 71, 87, 0.4) !important;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>色違い探しゲーム</h1>
+    <div class="info">ステージ: <span id="score">1</span></div>
+    
+    <div id="game-container"></div>
+
+    <script>
+        const container = document.getElementById('game-container');
+        const scoreDisplay = document.getElementById('score');
+        
+        let stage = 1;
+        let isTransitioning = false; // 連打によるバグを防ぐフラグ
+
+        // --- 効果音を生成する関数 (Web Audio API) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playSound(type) {
+            // ブラウザのセキュリティ制限対策（ユーザー操作に同期してContextを再開）
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+
+            if (type === 'correct') {
+                // 正解音：ピコーン！（低い音から高い音へ素早く変化）
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(523.25, now); // C5 (ド)
+                osc.frequency.setValueAtTime(880.00, now + 0.08); // A5 (ラ)
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+                osc.start(now);
+                osc.stop(now + 0.25);
+            } else if (type === 'miss') {
+                // 不正解音：ブブー（低い濁った音）
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(120, now);
+                osc.frequency.linearRampToValueAtTime(100, now + 0.3);
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now);
+                osc.stop(now + 0.3);
+            }
+        }
+
+        // --- ゲームのメイン処理 ---
+        function initGame() {
+            isTransitioning = false;
+
+            // ステージに応じたマスのサイズ決定
+            let size = 2;
+            if (stage > 2) size = 3;
+            if (stage > 5) size = 4;
+            if (stage > 10) size = 5;
+            if (stage > 15) size = 6;
+            if (stage > 20) size = 7;
+            if (stage > 25) size = 8;
+
+            // 色の難易度（差分）の計算
+            let diff = Math.max(3, 50 - stage * 2); 
+
+            // ランダムなベース色
+            const baseH = Math.floor(Math.random() * 360);
+            const baseS = Math.floor(Math.random() * 40) + 50; 
+            const baseL = Math.floor(Math.random() * 30) + 40; 
+
+            const baseColor = `hsl(${baseH}, ${baseS}%, ${baseL}%)`;
+            const targetL = baseL + (baseL > 60 ? -diff : diff);
+            const targetColor = `hsl(${baseH}, ${baseS}%, ${targetL}%)`;
+
+            container.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+            container.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+            container.innerHTML = '';
+
+            const totalTiles = size * size;
+            const targetIndex = Math.floor(Math.random() * totalTiles);
+
+            for (let i = 0; i < totalTiles; i++) {
+                const tile = document.createElement('div');
+                tile.classList.add('tile');
+
+                if (i === targetIndex) {
+                    tile.style.backgroundColor = targetColor;
+                    tile.addEventListener('click', (e) => nextStage(e.target));
+                } else {
+                    tile.style.backgroundColor = baseColor;
+                    tile.addEventListener('click', () => missClick());
+                }
+
+                container.appendChild(tile);
+            }
+        }
+
+        function nextStage(targetTile) {
+            if (isTransitioning) return;
+            isTransitioning = true;
+
+            // 正解音を鳴らす
+            playSound('correct');
+
+            // 正解タイルのポコンッというアニメーション
+            targetTile.classList.add('correct-anim');
+
+            // アニメーションが終わるのを少し待ってから次のステージへ
+            setTimeout(() => {
+                stage++;
+                scoreDisplay.textContent = stage;
+                initGame();
+            }, 200);
+        }
+
+        function missClick() {
+            if (isTransitioning) return;
+            isTransitioning = true;
+
+            // 不正解音を鳴らす
+            playSound('miss');
+
+            // 枠全体をガタガタ揺らすアニメーション
+            container.classList.add('shake-anim');
+
+            // 揺れが終わったらアラートを出してリセット
+            setTimeout(() => {
+                container.classList.remove('shake-anim');
+                alert(`ザンネン！そこは同じ色です。\n到達ステージ: ${stage}`);
+                stage = 1;
+                scoreDisplay.textContent = stage;
+                initGame();
+            }, 300);
+        }
+
+        // 初回起動
+        initGame();
+    </script>
+</body>
+</html>
